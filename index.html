@@ -492,6 +492,11 @@ h3{font-size:clamp(18px,1.4vw,22px)}
   main{padding-left:12px;padding-right:12px}
 }
 
+
+/* ================== 双屏连线 ================== */
+.link-card{border:2px dashed var(--seal);background:linear-gradient(180deg,var(--seal-soft),transparent)}
+.link-card .code{font-family:"Noto Serif SC",serif;font-weight:900;font-size:clamp(34px,4vw,52px);letter-spacing:.24em;
+  color:var(--seal);text-align:center;margin-top:12px;text-indent:.24em}
 </style>
 </head>
 <body class="consult">
@@ -755,13 +760,16 @@ const DEFAULT_DEPTS = ['销售','营运 / 生产 / 门店','采购 / 仓库','�
 
 /* ================== 状态 ================== */
 let S = null, screen = 'home';
+let ROLE = 'consultant', CODE = null, lastLocal = 0, clientAllow = false, unsubData = null, unsubCtl = null;
+const CODE_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+function newCode(){ let c=''; for (let i=0;i<6;i++) c += CODE_CHARS[Math.floor(Math.random()*CODE_CHARS.length)]; return c; }
 let DB = null, SAMPLE = null, DL = null, listCache = null;
 const LS_KEY = 'pinyu_diag_v3';
 const COL = 'diagnoses_v3';
 
 function blank(mode){
-  return {v:3, id:'d'+Date.now().toString(36)+Math.random().toString(36).slice(2,6), createdAt:Date.now(), mode,
-    profile:{company:'',contact:'',phone:'',industry:'工厂 / 制造',headcount:'',sites:'',managers:'',depts:'',revenue:'',revenueLast:'',margin:'',salary:'',leavers:'',bossHours:'',consultant:''},
+  return {v:3, id:newCode(), createdAt:Date.now(), mode, allowLive:false,
+    profile:{company:'',contact:'',phone:'',industry:'工厂 / 制造',headcount:'',sites:'',managers:'',depts:'',revenue:'',revenueLast:'',margin:'',salary:'',indGrowth:'',leavers:'',bossHours:'',consultant:''},
     pains:[], top:[], answers:{}, evidence:{}, modNotes:{}, payRows:[], staff:[],
     time:{fire:8,chase:8,approve:5,meet:5,biz:10,strat:2,rate:''},
     why:{l1:[], l2:{}, l3:[], dur:''},
@@ -821,6 +829,7 @@ function peopleA(s){
   const byPerf = [...ps].sort((a,b)=>b.perf-a.perf || num(b.pay)-num(a.pay));
   const byPay = [...ps].sort((a,b)=>num(b.pay)-num(a.pay));
   const payRank = x => byPay.indexOf(x)+1;
+  const best = byPerf[0], bestRank = payRank(best);
   const med = [...pay].sort((a,b)=>a-b)[Math.floor(pay.length/2)];
   const flags = []; let riskCost = 0;
   byPerf.forEach((x,i) => {
@@ -828,7 +837,7 @@ function peopleA(s){
     if (x.perf <= 2 && num(x.pay) > med) flags.push(['bad',`${x.name}表现偏低，薪水却高于中位数。其他人都看在眼里。`]);
     if (x.perf >= 4 && x.risk === 'high'){ const c = num(x.pay)*6; riskCost += c; flags.push(['bad',`${x.name}是高表现、高流失风险，走了的重置成本约 ${rm(c)}。`]); }
   });
-  return {ps, r, flags, riskCost};
+  return {ps, r, flags, riskCost, best:best.name, bestRank, n:ps.length};
 }
 function depA(s){ const only = DEPS.filter((_,i)=>s.dep[i]).length; return {only, total:DEPS.length, share: only/DEPS.length}; }
 function futureA(s, c){
@@ -839,7 +848,8 @@ function futureA(s, c){
     return {eff: pr*eff*k, turn: leavers*turn*avg*3*k, boss: ta.yearRM*.5*k};
   }).map(y => ({...y, sum: y.eff+y.turn+y.boss}));
   const cum = years.reduce((a,y)=>a+y.sum,0), price = num(s.fut.price);
-  return {years, cum, price, roi: price ? cum/price : null};
+  const payback = price && years[0].sum ? Math.max(1, Math.round(price / (years[0].sum/12))) : null;
+  return {years, cum, price, payback, roi: price ? cum/price : null};
 }
 function planItems(s, c){
   const keys = [...new Set([...whyA(s).keys, ...c.recs.map(r=>r.k)])];
@@ -893,11 +903,12 @@ function compute(s){
   const gap = painMods.length && !painMods.includes(red.id) && Math.min(...painMods) > red.id;
   const p = s.profile, hc = num(p.headcount), rev = num(p.revenue), revL = num(p.revenueLast);
   const pay = payAnalysis(s), payroll = pay.monthly ? pay.monthly*12 : hc*num(p.salary)*12;
-  const leak = Math.min(.25,(1-pct)*.25), leavers = num(p.leavers), avgMonthly = hc ? payroll/12/hc : num(p.salary);
+  const effGap = num(s.fut.eff)/100, leavers = num(p.leavers), avgMonthly = hc ? payroll/12/hc : num(p.salary);
   const answered = Object.keys(s.answers).length, verified = Object.keys(s.evidence).filter(k=>s.evidence[k]).length;
   const c = {mods,pct,level,red,recs,matrix:cand.slice(0,10),topPains,painMods,gap,hc,rev,
     growth: rev && revL ? (rev-revL)/revL : null, perHead: rev && hc ? rev/hc : null,
-    payroll, laborRatio: rev && payroll ? payroll/rev : null, loss: payroll*leak, leak,
+    indGrowth: String(p.indGrowth).trim() !== '' ? num(p.indGrowth)/100 : null,
+    payroll, laborRatio: rev && payroll ? payroll/rev : null, loss: payroll*effGap, effGap,
     turnover: hc && p.leavers!=='' ? leavers/hc : null, turnoverCost: leavers*avgMonthly*3,
     evRate: answered ? verified/answered : 0, pay, staff: staffAnalysis(s),
     time: timeA(s), why: whyA(s), goals: goalsA(s), people: peopleA(s), dep: depA(s)};
@@ -924,7 +935,7 @@ function localList(){ try { return JSON.parse(localStorage.getItem(LS_KEY) || '[
 function localSave(d){ try { const l = localList().filter(x=>x.id!==d.id); l.unshift(d); localStorage.setItem(LS_KEY, JSON.stringify(l.slice(0,60))); } catch(e){} }
 async function save(silent){
   if (!S) return;
-  S.updatedAt = Date.now();
+  S.updatedAt = Date.now(); lastLocal = Date.now();
   if (complete(S)){ const c = compute(S); S.summary = {pct:Math.round(c.pct*100), level:c.level.lv+' '+c.level.name, red:c.red.name, mods:c.mods.map(m=>+m.pct.toFixed(3))}; }
   localSave(S);
   if (DB){
@@ -933,6 +944,62 @@ async function save(silent){
   } else if (!silent) toast('已保存在这台设备');
 }
 let saveT; function saveSoon(){ clearTimeout(saveT); saveT = setTimeout(()=>save(true), 1500); }
+
+/* ================== 双屏同步 ================== */
+const ctlRef = () => DB.collection(COL).doc('ctl_' + CODE);
+function shareLink(){ const u = new URL(location.href); u.searchParams.set('c', CODE); return u.toString(); }
+function pushCtl(){
+  if (!DB || !CODE || ROLE !== 'consultant') return;
+  const sc = (screen === 'report' || screen === 'track' || screen === 'home') ? 'done' : screen;
+  ctlRef().set({screen: sc, allow: !!(S && S.allowLive), mode: S ? S.mode : 'quick', ts: Date.now()}).catch(()=>{});
+}
+function startSync(code, role){
+  CODE = code; ROLE = role;
+  if (!DB) return;
+  unsubData && unsubData(); unsubCtl && unsubCtl();
+  unsubData = DB.collection(COL).doc(CODE).onSnapshot(snap => {
+    const d = snap.data ? snap.data() : null; if (!d) return;
+    if (Date.now() - lastLocal < 2500) return;
+    const mine = (S && ROLE === 'consultant') ? {notes:S.notes, ai:S.ai, status:S.status, nextDate:S.nextDate, allowLive:S.allowLive, plan:S.plan} : {};
+    S = Object.assign(blank(d.mode || 'quick'), d, mine);
+    if (ROLE === 'client') renderClient();
+    else { live(); syncBadge(); if (screen === 'report') renderReport(); }
+  }, ()=>{});
+  if (role === 'client'){
+    unsubCtl = ctlRef().onSnapshot(snap => {
+      const d = snap.data ? snap.data() : null; if (!d) return;
+      clientAllow = !!d.allow;
+      const to = d.screen || 'done';
+      if (to !== screen){ screen = to; renderClient(); window.scrollTo(0,0); }
+      else renderClient();
+    }, ()=>{});
+  }
+}
+function syncBadge(){
+  const el = document.getElementById('syncState'); if (!el || !S) return;
+  el.textContent = DB ? '客户答题会即时同步到这里。' : '目前没有连线设定，同步功能关闭（只能单机使用）。';
+}
+function renderClient(){
+  document.body.classList.remove('consult');
+  document.getElementById('navrow').hidden = true;
+  const prog = document.getElementById('prog');
+  if (!S){ prog.hidden = true; app.innerHTML = '<section class="sheet"><h2>正在连线…</h2><p class="lead">请稍等，顾问正在开始。</p></section>'; return; }
+  if (screen === 'done'){
+    prog.hidden = true;
+    app.innerHTML = `<section class="sheet hero-card"><div class="lockup"><img src="${LOGO}" alt="品誉"><span>品誉咨询</span></div>
+      <h1>填写完成，谢谢您</h1><p class="lead">顾问正在整理您的诊断结果，等一下会为您逐项解读。</p></section>`;
+    return;
+  }
+  const f = flow(), i = f.indexOf(screen);
+  prog.hidden = i < 0;
+  if (i >= 0) prog.innerHTML = `<div class="prog-t"><span><b>${esc(TITLE[screen] || (MODS[+screen.slice(1)-1]||{}).name || '')}</b></span><span>${i+1} / ${f.length-1}</span></div><div class="prog-b"><i style="width:${(i+1)/(f.length-1)*100}%"></i></div>`;
+  const R = {profile:renderProfile,pains:renderPains,time:renderTime,why:renderWhy,goals:renderGoals,people:renderPeople,dep:renderDep,quiz:renderQuiz,pay:renderPay,staff:renderStaff,future:renderFuture,plan:renderPlan};
+  const fn = R[screen] || (screen[0]==='m' ? (()=>renderModule(+screen.slice(1))) : null);
+  if (!fn){ app.innerHTML = '<section class="sheet"><h2>请稍等</h2><p class="lead">顾问正在准备下一步。</p></section>'; return; }
+  fn();
+  document.querySelectorAll('.cv').forEach(el => el.remove());
+  if (!clientAllow) document.querySelectorAll('#live').forEach(el => el.remove());
+}
 
 /* ================== 通用部件 ================== */
 const app = document.getElementById('app');
@@ -945,7 +1012,7 @@ function head(sc, ask, sub){
 function tipBox(t){ return `<div class="cv"><div class="tip"><strong>顾问怎么带</strong>${t}</div></div>`; }
 
 /* ================== 渲染主控 ================== */
-function go(to){ screen = to; render(); window.scrollTo(0,0); }
+function go(to){ screen = to; render(); pushCtl(); window.scrollTo(0,0); }
 function render(){
   const prog = document.getElementById('prog'), nav = document.getElementById('navrow'), navIn = document.getElementById('navrowIn');
   if (screen === 'home'){ prog.hidden = true; nav.hidden = true; return renderHome(); }
@@ -991,6 +1058,7 @@ function renderHome(){
       <button class="mode" data-new="quick" type="button"><h3>快速咨询　45 分钟</h3><p>约好的一对一。加上痛点盘点和 19 题核心体检，报告完整，当场可以推 2 天课。</p></button>
       <button class="mode" data-new="deep" type="button"><h3>深度咨询　2 小时</h3><p>已报名的客户做课前调研，或签了辅导的客户做基线。50 题、薪酬数据、员工访谈。</p></button>
     </div>
+    <div class="row" style="margin-top:14px;justify-content:center"><button class="btn ghost sm" data-act="join" type="button">我是客户，输入会话码</button></div>
     <p class="small" style="margin-top:12px">售前用短的，售后用长的。老板还没买单之前，问太多他会累；买单之后，问得越细他越安心。</p>
   </section>
   <section class="sheet">
@@ -1017,6 +1085,16 @@ function renderProfile(){
   const p = S.profile, n = 'type="number" inputmode="decimal" min="0"';
   const f = (k, label, attrs='') => `<label class="f"><span>${label}</span><input class="inp" data-bind="profile.${k}" value="${esc(p[k])}" ${attrs}></label>`;
   app.innerHTML = `
+  ${ROLE==='consultant' ? `<section class="sheet cv link-card">
+    <h2>Zoom 双屏连线</h2>
+    <p class="lead">把链接发给客户，客户在自己的电脑上答题，您这边即时看到结果。客户看不到分数、报告和话术。</p>
+    <div class="code">${esc(S.id)}</div>
+    <div class="row" style="margin-top:12px">
+      <button class="btn" data-act="copyLink" type="button">复制客户链接</button>
+      <button class="btn ghost" data-act="toggleLive" type="button">${S.allowLive?'客户看得到即时数字':'客户看不到即时数字'}</button>
+    </div>
+    <p class="small" id="syncState" style="margin-top:10px"></p>
+  </section>` : ''}
   <section class="sheet">
     <h2>企业档案</h2>
     <p class="lead">数字越真实，后面老板自己算出来的代价越有说服力。不知道的先空着。</p>
@@ -1028,6 +1106,8 @@ function renderProfile(){
     <div class="two">${f('headcount','员工人数 <em>*</em>',n)}${f('sites','门店或厂房数量',n)}${f('depts','部门数量',n)}${f('managers','中层主管人数',n)}</div>
     <div class="group-t">经营数字</div>
     <div class="two">${f('revenue','今年预计营业额 (RM)',n)}${f('revenueLast','去年营业额 (RM)',n)}${f('margin','净利率 (%)',n)}${f('salary','员工平均月薪 (RM)',n)}</div>
+    ${f('indGrowth','您的行业这两年大概增长多少？(%)',n+' placeholder="例如 8"')}
+    <p class="hint">这一题最关键。老板最大的自我安慰是"我还有赚钱"，只有跟行业比，才看得出是稳定，还是正在被追过去。问法："同行做得好的，一年大概长多少？"</p>
     <div class="group-t">人才</div>
     <div class="two">${f('leavers','过去 12 个月离职人数',n)}${f('consultant','负责顾问','placeholder="例如：Stephanie"')}</div>
   </section>`;
@@ -1158,9 +1238,9 @@ function scatterSVG(ps){
 function livePeople(){
   const pa = peopleA(S);
   if (!pa) return '<p class="small">至少填两位员工的代号、月薪和表现分，这里会画出对照图。</p>';
-  const rTxt = pa.r >= .6 ? '强' : pa.r >= .3 ? '弱' : '几乎没有';
+  const off = pa.bestRank > 1;
   return `<h3>表现和薪水，有没有对得上？</h3>${scatterSVG(pa.ps)}
-  <div class="found ${pa.r < .6 ? 'red':''}"><div class="k">薪水跟表现的关联</div><div class="big">${rTxt}（${pa.r.toFixed(2)}）</div><p>${pa.r < .3 ? '在这家公司，做得好和拿得多几乎没有关系。员工很快就会学会"做刚好就够"。' : pa.r < .6 ? '有一点关系，但不够明显，员工感受不到。' : '薪水基本跟着表现走，这是好的基础。'}</p></div>
+  <div class="found ${off?'red':''}"><div class="k">表现最好的那一位</div><div class="big">${esc(pa.best)}，薪水排第 ${pa.bestRank} / ${pa.n}</div><p>${off ? '他每天都看得到自己排第几。好员工不会吵，他们只是安静地开始看别的机会。' : '表现第一、薪水也第一，这是好的基础。接下来看第二、第三位有没有排对。'}</p></div>
   ${pa.flags.length ? `<ul class="flags">${pa.flags.map(f=>`<li class="${f[0]}">${esc(f[1])}</li>`).join('')}</ul>` : ''}
   ${pa.riskCost ? `<div class="found red"><div class="k">高表现、可能会走的人，重置成本合计</div><div class="big">${rm(pa.riskCost)}</div><p>按每人 6 个月薪资估算招聘、培训和空窗期损失。</p></div>` : ''}`;
 }
@@ -1257,10 +1337,10 @@ function renderStaff(){
 /* ================== 放大：3 年代价模拟 ================== */
 function renderFuture(){
   const f = S.fut;
-  app.innerHTML = head('future','如果公司有了绩效和薪酬系统，您觉得会改变多少？','两个数字由老板自己决定，系统只负责算。') +
-  tipBox('把滑杆交给老板："您觉得有系统以后，同样的人能多做多少？流失能少多少？"老板定的数字通常比我们保守，这正好，他自己定的他才信。算完问："这笔钱，您打算什么时候开始拿回来？"') +
+  app.innerHTML = head('future','如果公司有了绩效和薪酬系统，您觉得会改变多少？','两个数字全部由老板自己决定，系统只负责算。报告里所有的钱，都是从这两个数字来的。') +
+  tipBox('把滑杆交给老板："您觉得有系统以后，同样这批人能多做多少？流失能少多少？"老板定的数字通常比我们保守，这正好——他自己定的他才不会反驳。算完问："这笔钱，您打算什么时候开始拿回来？"如果他问数字怎么来的，就说：全部是您刚才自己定的。') +
   `<div style="margin-top:10px">
-    <div class="slider"><label for="f_eff">同样的人，产出能多多少<small>人效提升</small></label><b id="fv_eff">${num(f.eff)}%</b><input id="f_eff" type="range" min="0" max="30" step="1" value="${num(f.eff)}" data-bind="fut.eff" data-num="1" data-show="fv_eff" data-unit="%"></div>
+    <div class="slider"><label for="f_eff">同样这批人，产出还能多多少<small>反过来说，就是现在每年少掉的</small></label><b id="fv_eff">${num(f.eff)}%</b><input id="f_eff" type="range" min="0" max="30" step="1" value="${num(f.eff)}" data-bind="fut.eff" data-num="1" data-show="fv_eff" data-unit="%"></div>
     <div class="slider"><label for="f_turn">离职的人能少多少<small>流失下降</small></label><b id="fv_turn">${num(f.turn)}%</b><input id="f_turn" type="range" min="0" max="60" step="5" value="${num(f.turn)}" data-bind="fut.turn" data-num="1" data-show="fv_turn" data-unit="%"></div>
   </div>
   <label class="f cv"><span>方案投资额 (RM)，用来算回报倍数</span><input class="inp" type="number" inputmode="numeric" data-bind="fut.price" value="${esc(f.price)}" placeholder="例如研修班加辅导的费用"></label>
@@ -1281,8 +1361,9 @@ function liveFuture(){
   const c = compute(S), fa = c.future;
   if (!c.payroll) return '<p class="small">需要员工人数和平均月薪（企业档案），才能计算。</p>';
   return `<h3>3 年可以拿回的价值</h3>${futureSVG(fa.years)}
+  ${c.loss ? `<div class="found red"><div class="k">照您自己定的 ${num(S.fut.eff)}%，现在每年少掉</div><div class="big">${rm(c.loss)}</div><p>薪资总额 ${rm(c.payroll)}，其中 ${num(S.fut.eff)}% 没有变成产出。这个比例是您刚才自己拉的。</p></div>` : ''}
   <div class="found red"><div class="k">3 年不改变，放弃的价值</div><div class="big">${rm(fa.cum)}</div><p>这是用老板自己定的数字算出来的：人效多 ${num(S.fut.eff)}%、流失少 ${num(S.fut.turn)}%。</p></div>
-  ${fa.roi ? `<div class="found"><div class="k">投资回报</div><div class="big">${fa.roi.toFixed(1)} 倍</div><p>每投入 RM 1，3 年约拿回 RM ${fa.roi.toFixed(1)}。</p></div>` : ''}
+  ${fa.payback ? `<div class="found"><div class="k">按第 1 年的回收速度</div><div class="big">约 ${fa.payback} 个月回本</div><p>投资 ${rm(fa.price)}，第 1 年拿回约 ${rm(fa.years[0].sum)}。往后是净赚。</p></div>` : ''}
   <p class="small" style="margin-top:10px">算法：人效价值 = 薪资总额 × 人效提升；少走的人 = 离职人数 × 下降比例 × 3 个月薪资；老板时间 = 救火时数 × 时薪 × 一半。薪资每年按 4% 增长。</p>`;
 }
 
@@ -1378,10 +1459,13 @@ function renderReport(){
   const top = c.topPains[0] || '员工不主动';
   const kp = [];
   if (c.perHead) kp.push(['',rm(c.perHead),'人均年营业额']);
-  if (c.growth !== null) kp.push([c.growth<0?'bad':'', (c.growth>0?'+':'')+pc(c.growth),'营业额增长']);
+  if (c.growth !== null) kp.push([c.growth<0?'bad':'', (c.growth>0?'+':'')+pc(c.growth),'您的营业额增长']);
+  if (c.indGrowth !== null) kp.push(['', (c.indGrowth>0?'+':'')+pc(c.indGrowth),'行业增长（老板估计）']);
+  const gGap = (c.growth !== null && c.indGrowth !== null) ? c.growth - c.indGrowth : null;
+  if (gGap !== null) kp.push([gGap<0?'bad':'', (gGap>0?'+':'')+pc(gGap),'您跟行业的差距']);
   if (c.laborRatio) kp.push(['', pc(c.laborRatio),'人工成本占营业额']);
   if (c.turnover !== null) kp.push([c.turnover>.3?'bad':'', pc(c.turnover),'年员工流失率']);
-  if (c.payroll) kp.push(['bad', rm(c.loss),'估算每年人效损失']);
+  if (c.loss) kp.push(['bad', rm(c.loss),`每年少掉的产出（按您定的 ${num(S.fut.eff)}%）`]);
   if (c.turnoverCost) kp.push(['bad', rm(c.turnoverCost),'估算每年离职重招成本']);
 
   app.innerHTML = `
@@ -1406,7 +1490,7 @@ function renderReport(){
       ${c.why.l2.length ? `<p>老板自己追到的根源是<b>${c.why.l2.map(x=>esc(x.gap)).join('、')}</b>${c.why.l3.length?`，一直没改是因为<b>${c.why.l3.map(x=>esc(x[1])).join('、')}</b>`:''}。</p>` : ''}
       <p>体检最弱的三个模块是<b>${weakest3.map(m=>m.name).join('、')}</b>，红灯在<b>${c.red.name}</b>（${pc(c.red.pct)}）。</p>
       ${c.time.sys ? `<p>老板每周有 <b>${c.time.sys} 小时</b>花在本来该由制度处理的事上，一年价值约 <b>${rm(c.time.yearRM)}</b>。</p>` : ''}
-      ${c.payroll ? `<p>按老板自己定的假设，3 年不改变，放弃的价值约 <b>${rm(c.future.cum)}</b>。</p>` : ''}
+      ${c.payroll ? `<p>按老板自己定的假设（人效可提升 ${num(S.fut.eff)}%、流失可降 ${num(S.fut.turn)}%），现在每年少掉约 <b>${rm(c.loss)}</b>，3 年不改变放弃约 <b>${rm(c.future.cum)}</b>。</p>` : ''}
       ${plan.length ? `<p>老板决定先做 <b>${plan.length} 件事</b>${S.commit.name?`，并签下承诺`:''}。</p>` : ''}
     </div>
     ${quotes.length ? `<div class="exec"><h2>老板说的话</h2>${quotes.map(([k,v])=>`<div class="quote">${esc(v)}<small>${qLabel[k]||''}</small></div>`).join('')}</div>` : ''}
@@ -1421,7 +1505,7 @@ function renderReport(){
   </section>` : ''}
 
   ${c.people ? `<section class="sheet"><h2>核心员工：表现与薪水</h2>${scatterSVG(c.people.ps)}
-    <div class="found ${c.people.r<.6?'red':''}"><div class="k">薪水跟表现的关联</div><div class="big">${c.people.r.toFixed(2)}</div><p>${c.people.r<.3?'做得好和拿得多几乎没有关系。':c.people.r<.6?'有关系，但员工感受不到。':'薪水基本跟着表现走。'}</p></div>
+    <div class="found ${c.people.bestRank>1?'red':''}"><div class="k">表现最好的那一位</div><div class="big">${esc(c.people.best)}，薪水排第 ${c.people.bestRank} / ${c.people.n}</div><p>${c.people.bestRank>1?'好员工不会吵，他们只是安静地开始看别的机会。':'表现第一、薪水也第一，这是好的基础。'}</p></div>
     ${c.people.flags.length ? `<ul class="flags">${c.people.flags.map(f=>`<li class="${f[0]}">${esc(f[1])}</li>`).join('')}</ul>` : ''}</section>` : ''}
 
   <section class="sheet">
@@ -1437,7 +1521,9 @@ function renderReport(){
   </section>
 
   ${kp.length ? `<section class="sheet"><h2>经营与人效数字</h2><div class="kpis">${kp.map(k=>`<div class="${k[0]}"><b>${k[1]}</b><span>${k[2]}</span></div>`).join('')}</div>
-    <p class="small" style="margin-top:10px">人效损失按薪资总额和诊断分数估算；离职成本按每人 3 个月薪资估算，用于讨论，不是审计数字。</p></section>` : ''}
+    ${gGap !== null && gGap < 0 ? `<div class="found red"><div class="k">您比行业慢了</div><div class="big">${pc(Math.abs(gGap))}</div><p>市场一直在往前，对手也在长。比行业慢，不叫稳定，叫正在被追过去。没有倒闭的行业，只有跟不上的企业。</p></div>` : ''}
+    ${gGap !== null && gGap >= 0 ? `<div class="found"><div class="k">您比行业快</div><div class="big">${pc(gGap)}</div><p>目前跑在前面。要守住这个差距，看的是系统能不能跟着规模一起长大。</p></div>` : ''}
+    <p class="small" style="margin-top:10px">每年少掉的产出 = 薪资总额 × 您自己估的人效提升空间；离职成本按每人 3 个月薪资估算。两者用于讨论，不是审计数字。</p></section>` : ''}
 
   ${c.pay.rows.length ? `<section class="sheet"><h2>薪酬结构分析</h2><p class="lead">${c.pay.rows.length} 个岗位，发现 ${c.pay.bad} 个需要处理的问题。浮动比例建议区间为品誉顾问参考值。</p>
     <div class="pay">${c.pay.rows.map(r => `<div class="pay-row"><div class="h"><span>${esc(r.title)}</span><span>${r.n} 人</span></div>
@@ -1452,7 +1538,7 @@ function renderReport(){
 
   ${c.payroll ? `<section class="sheet"><h2>不改变的代价</h2>${futureSVG(c.future.years)}
     <div class="found red"><div class="k">3 年放弃的价值（按老板自己定的假设）</div><div class="big">${rm(c.future.cum)}</div><p>人效多 ${num(S.fut.eff)}%、流失少 ${num(S.fut.turn)}%。</p></div>
-    ${c.future.roi ? `<div class="found"><div class="k">投资回报</div><div class="big">${c.future.roi.toFixed(1)} 倍</div></div>` : ''}</section>` : ''}
+    ${c.future.payback ? `<div class="found"><div class="k">按第 1 年的回收速度</div><div class="big">约 ${c.future.payback} 个月回本</div><p>投资 ${rm(c.future.price)}，第 1 年拿回约 ${rm(c.future.years[0].sum)}。</p></div>` : ''}</section>` : ''}
 
   <section class="sheet">
     <h2>改善优先级</h2>
@@ -1591,10 +1677,11 @@ function aiData(){
   const pay = c.pay.rows.map(r=>`${r.title}（${r.cat}，${r.n} 人）：底薪 ${r.min||'?'} 到 ${r.max||'?'}，平均 ${r.avg}，浮动 ${r.v}，新人起薪 ${r.newStart||'未填'}，市场 ${r.market||'未填'}；${r.flags.map(f=>f[1]).join('；')}`).join('\n');
   return `公司：${p.company}；行业：${p.industry}；员工 ${p.headcount} 人；门店或厂房 ${p.sites||'未填'}；中层 ${p.managers||'未填'} 人；营业额 ${p.revenue||'未填'}（去年 ${p.revenueLast||'未填'}）；净利率 ${p.margin||'未填'}%；离职 ${p.leavers||'未填'} 人
 痛点：${S.pains.join('、')||'无'}；最痛：${c.topPains.join('、')||'无'}
+行业对比：公司增长 ${c.growth!==null?pc(c.growth):'未填'}，行业增长 ${c.indGrowth!==null?pc(c.indGrowth):'未填'}
 老板的一周：共 ${c.time.tot} 小时，被制度问题吃掉 ${c.time.sys} 小时，战略 ${c.time.strat} 小时
 根源追问：直接原因 ${c.why.l1.map(x=>x[1]).join('、')||'无'}；制度缺口 ${c.why.l2.map(x=>x.gap).join('、')||'无'}；没改原因 ${c.why.l3.map(x=>x[1]).join('、')||'无'}；持续 ${c.why.dur||'未答'}
 目标挑战：老板填得出 ${c.goals.filled}/${c.goals.n}，负责人知道 ${c.goals.knows}/${c.goals.n}
-${c.people?`核心员工薪酬与表现相关系数 ${c.people.r.toFixed(2)}；${c.people.flags.map(f=>f[1]).join('；')}`:''}
+${c.people?`核心员工：表现最好的是 ${c.people.best}，薪水排第 ${c.people.bestRank}/${c.people.n}；${c.people.flags.map(f=>f[1]).join('；')}`:''}
 老板依赖度：${c.dep.only}/${c.dep.total} 个决定只有老板能做
 体检：${Math.round(c.pct*100)}/100，${c.level.lv} ${c.level.name}；${c.mods.map(m=>m.name+' '+pc(m.pct)).join('，')}；红灯 ${c.red.name}
 3 年代价（老板自定：人效 ${S.fut.eff}%，流失降 ${S.fut.turn}%）：${c.payroll?rm(c.future.cum):'未计算'}
@@ -1651,10 +1738,10 @@ document.addEventListener('click', async e => {
   const d = t.dataset;
   if (d.go){ if (S && screen !== 'home') save(true); return go(d.go); }
   if (d.next){ save(true); return go(d.next); }
-  if (d.new){ S = blank(d.new); return go('profile'); }
+  if (d.new){ S = blank(d.new); if (DB) startSync(S.id, 'consultant'); save(true); return go('profile'); }
   if (d.open){
     const rec = (listCache || localList()).find(x=>x.id===d.open);
-    if (rec){ S = Object.assign(blank(rec.mode||'deep'), JSON.parse(JSON.stringify(rec))); go(complete(S) ? 'report' : 'profile'); }
+    if (rec){ S = Object.assign(blank(rec.mode||'deep'), JSON.parse(JSON.stringify(rec))); if (DB) startSync(S.id, 'consultant'); go(complete(S) ? 'report' : 'profile'); }
     return;
   }
   if (d.set){
@@ -1706,6 +1793,13 @@ document.addEventListener('click', async e => {
       baseline:{id:old.id, date:new Date(old.updatedAt||old.createdAt).toLocaleDateString('zh-CN'), pct:Math.round(c.pct*100), mods:c.mods.map(m=>m.pct)}, status:old.status});
     S = n; toast('复诊开始，档案和计划已带过来'); return go('time');
   }
+  if (act==='copyLink'){
+    if (!DB){ toast('还没有连线设定，无法同步给客户'); return; }
+    try { await navigator.clipboard.writeText(shareLink()); toast('客户链接已复制，贴到 Zoom 聊天室'); }
+    catch(_){ prompt('复制这个链接给客户', shareLink()); } return;
+  }
+  if (act==='toggleLive'){ S.allowLive = !S.allowLive; pushCtl(); save(true); t.textContent = S.allowLive?'客户看得到即时数字':'客户看不到即时数字'; return; }
+  if (act==='join'){ const c = (prompt('请输入顾问给您的会话码')||'').trim().toUpperCase(); if (c){ const u = new URL(location.href); u.searchParams.set('c', c); location.href = u.toString(); } return; }
   if (act==='save') return save(false);
   if (act==='copy'){ try { await navigator.clipboard.writeText(summaryText()); toast('摘要已复制'); } catch(_){ toast('这里不能直接复制，请用 WhatsApp 发送'); } return; }
   if (act==='download') return downloadReport();
@@ -1774,20 +1868,29 @@ function watchList(){
     }, () => { DB = null; listCache = null; if (screen==='home') renderHome(); });
   } catch(_){ DB = null; }
 }
+const _q = new URL(location.href).searchParams.get('c');
+const _code = (_q || '').trim().toUpperCase();
+if (_code){ ROLE = 'client'; CODE = _code; const _sw = document.getElementById('viewSwitch'); if (_sw) _sw.hidden = true; document.body.classList.remove('consult'); screen = 'done'; }
 if (gate()){
-  render();
+  if (ROLE === 'client'){ document.getElementById('prog').hidden = true; app.innerHTML = '<section class="sheet"><h2>正在连线…</h2><p class="lead">请稍等，顾问正在开始。</p></section>'; }
+  else render();
   (async () => {
     if (window.claude && window.claude.use){
       const [db, sample, dl] = await Promise.all(['db','sample','downloads'].map(n => window.claude.use(n).catch(()=>null)));
       SAMPLE = sample; DL = dl || blobDownload();
-      if (db){ DB = db; watchList(); }
+      if (db){ DB = db; if (ROLE === 'client') startSync(CODE, 'client'); else watchList(); }
     } else {
       DL = blobDownload();
       if (CONFIG.AI_ENDPOINT) SAMPLE = endpointSample(CONFIG.AI_ENDPOINT);
-      try { const fs = await initFirebase(); if (fs){ DB = fs; watchList(); } } catch(e){ console.warn('firebase', e); }
+      try { const fs = await initFirebase(); if (fs){ DB = fs; if (ROLE === 'client') startSync(CODE, 'client'); else watchList(); } } catch(e){ console.warn('firebase', e); }
+    }
+    if (ROLE === 'client'){
+      if (!DB) app.innerHTML = '<section class="sheet"><h2>连不上</h2><p class="lead">这个链接需要顾问端的同步设定，请跟顾问确认。</p></section>';
+      return;
     }
     if (screen === 'report') renderReport();
     if (screen === 'home') renderHome();
+    syncBadge();
   })();
 }
 </script>
