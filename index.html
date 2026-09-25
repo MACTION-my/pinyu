@@ -721,7 +721,10 @@ const FW_OF = {}; FRAMEWORKS.forEach(f => f.mods.forEach(m => FW_OF[m] = f));
 =============================================================== */
 const CONFIG = {
   FIREBASE: {
-    apiKey:'', authDomain:'', projectId:'', appId:''
+    apiKey:'AIzaSyCVBznwXFmUHxCRTX45uSZ0iuUud2QyBog',
+    authDomain:'maction-d5adc.firebaseapp.com',
+    projectId:'maction-d5adc',
+    appId:'1:795787072881:web:b13961c19e2f92b61752d0'
   },
   AI_ENDPOINT: '',
   PIN: 'pinyu2026'
@@ -977,7 +980,8 @@ function startSync(code, role){
 }
 function syncBadge(){
   const el = document.getElementById('syncState'); if (!el || !S) return;
-  el.textContent = DB ? '客户答题会即时同步到这里。' : '目前没有连线设定，同步功能关闭（只能单机使用）。';
+  el.textContent = DB ? '已连线。客户答题会即时同步到这里。' : '还没有连线设定，双屏同步关闭（其他功能正常）。';
+  const h = document.getElementById('syncHelp'); if (h) h.hidden = !!DB;
 }
 function renderClient(){
   document.body.classList.remove('consult');
@@ -1094,6 +1098,7 @@ function renderProfile(){
       <button class="btn ghost" data-act="toggleLive" type="button">${S.allowLive?'客户看得到即时数字':'客户看不到即时数字'}</button>
     </div>
     <p class="small" id="syncState" style="margin-top:10px"></p>
+    <p class="small" id="syncHelp" hidden style="margin-top:4px">在档案最上面的 CONFIG 填入 Firebase 设定，双屏同步就会启用。</p>
   </section>` : ''}
   <section class="sheet">
     <h2>企业档案</h2>
@@ -1855,9 +1860,13 @@ function endpointSample(url){
 }
 async function initFirebase(){
   const c = CONFIG.FIREBASE; if (!c || !c.projectId) return null;
-  await loadScript('https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js');
-  await loadScript('https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js');
+  const B = 'https://www.gstatic.com/firebasejs/10.12.2/';
+  await loadScript(B + 'firebase-app-compat.js');
+  await loadScript(B + 'firebase-auth-compat.js');
+  await loadScript(B + 'firebase-firestore-compat.js');
   firebase.initializeApp(c);
+  try { await firebase.auth().signInAnonymously(); }
+  catch(e){ console.warn('匿名登入失败，请在 Firebase 开启 Anonymous sign-in', e); }
   return firebase.firestore();
 }
 function watchList(){
@@ -1878,11 +1887,11 @@ if (gate()){
     if (window.claude && window.claude.use){
       const [db, sample, dl] = await Promise.all(['db','sample','downloads'].map(n => window.claude.use(n).catch(()=>null)));
       SAMPLE = sample; DL = dl || blobDownload();
-      if (db){ DB = db; if (ROLE === 'client') startSync(CODE, 'client'); else watchList(); }
+      if (db){ DB = db; if (ROLE === 'client') startSync(CODE, 'client'); else { watchList(); if (S) startSync(S.id, 'consultant'); } }
     } else {
       DL = blobDownload();
       if (CONFIG.AI_ENDPOINT) SAMPLE = endpointSample(CONFIG.AI_ENDPOINT);
-      try { const fs = await initFirebase(); if (fs){ DB = fs; if (ROLE === 'client') startSync(CODE, 'client'); else watchList(); } } catch(e){ console.warn('firebase', e); }
+      try { const fs = await initFirebase(); if (fs){ DB = fs; if (ROLE === 'client') startSync(CODE, 'client'); else { watchList(); if (S) startSync(S.id, 'consultant'); } } } catch(e){ console.warn('firebase', e); }
     }
     if (ROLE === 'client'){
       if (!DB) app.innerHTML = '<section class="sheet"><h2>连不上</h2><p class="lead">这个链接需要顾问端的同步设定，请跟顾问确认。</p></section>';
