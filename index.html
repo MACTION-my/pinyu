@@ -497,6 +497,16 @@ h3{font-size:clamp(18px,1.4vw,22px)}
 .link-card{border:2px dashed var(--seal);background:linear-gradient(180deg,var(--seal-soft),transparent)}
 .link-card .code{font-family:"Noto Serif SC",serif;font-weight:900;font-size:clamp(34px,4vw,52px);letter-spacing:.24em;
   color:var(--seal);text-align:center;margin-top:12px;text-indent:.24em}
+
+/* ================== 顾问登入 ================== */
+.login-card{max-width:520px;margin:6vh auto 0}
+.login-box{max-width:340px;margin:22px auto 0;position:relative;z-index:1}
+.login-box .inp{text-align:center;letter-spacing:.12em;border:0;background:rgba(255,255,255,.16);color:#fff}
+.login-box .inp::placeholder{color:rgba(255,255,255,.6);letter-spacing:normal}
+.login-box .inp:focus{background:rgba(255,255,255,.24);outline:2px solid var(--gold);outline-offset:0}
+.login-box .btn{margin-top:14px;background:#fff;color:var(--seal);box-shadow:0 6px 18px rgba(0,0,0,.25)}
+.login-box .btn:hover{filter:none;background:#FFF4F4}
+.login-err{min-height:22px;margin-top:8px;font-size:14px;color:#FFD9DB;text-align:center}
 </style>
 </head>
 <body class="consult">
@@ -965,8 +975,13 @@ function startSync(code, role){
     if (Date.now() - lastLocal < 2500) return;
     const mine = (S && ROLE === 'consultant') ? {notes:S.notes, ai:S.ai, status:S.status, nextDate:S.nextDate, allowLive:S.allowLive, plan:S.plan} : {};
     S = Object.assign(blank(d.mode || 'quick'), d, mine);
-    if (ROLE === 'client') renderClient();
-    else { live(); syncBadge(); if (screen === 'report') renderReport(); }
+    // 对方改了资料，重画整页，输入框和滑杆才会跟着更新；
+    // 但自己正在打字时不重画，免得游标被踢掉。
+    const a = document.activeElement;
+    const typing = a && (a.tagName === 'INPUT' || a.tagName === 'TEXTAREA' || a.tagName === 'SELECT');
+    if (ROLE === 'client'){ if (typing) live(); else renderClient(); }
+    else if (typing){ live(); syncBadge(); }
+    else render();
   }, ()=>{});
   if (role === 'client'){
     unsubCtl = ctlRef().onSnapshot(snap => {
@@ -980,8 +995,11 @@ function startSync(code, role){
 }
 function syncBadge(){
   const el = document.getElementById('syncState'); if (!el || !S) return;
-  el.textContent = DB ? '已连线。客户答题会即时同步到这里。' : '还没有连线设定，双屏同步关闭（其他功能正常）。';
+  el.textContent = DB ? '已连线。客户答题会即时同步到这里。' : (FB_ERR || '正在连线…');
+  el.style.color = DB ? '' : 'var(--seal)';
+  el.style.fontWeight = DB ? '' : '700';
   const h = document.getElementById('syncHelp'); if (h) h.hidden = !!DB;
+  const b = document.querySelector('[data-act="copyLink"]'); if (b) b.disabled = !DB;
 }
 function renderClient(){
   document.body.classList.remove('consult');
@@ -1031,7 +1049,7 @@ function render(){
   navIn.innerHTML = `<button class="btn ghost" data-go="${prev}" type="button">上一步</button><button class="btn ${next==='report'?'seal':''}" data-next="${next}" type="button">${next==='report'?'生成诊断报告':(SKIPPABLE.includes(screen)?'下一步（可跳过）':'下一步')}</button>`;
   const R = {profile:renderProfile,pains:renderPains,time:renderTime,why:renderWhy,goals:renderGoals,people:renderPeople,dep:renderDep,quiz:renderQuiz,pay:renderPay,staff:renderStaff,future:renderFuture,plan:renderPlan,report:renderReport};
   (R[screen] || (()=>renderModule(+screen.slice(1))))();
-  refreshNext();
+  refreshNext(); syncBadge();
 }
 function refreshNext(){
   const b = document.querySelector('[data-next]'); if (!b) return;
@@ -1098,7 +1116,7 @@ function renderProfile(){
       <button class="btn ghost" data-act="toggleLive" type="button">${S.allowLive?'客户看得到即时数字':'客户看不到即时数字'}</button>
     </div>
     <p class="small" id="syncState" style="margin-top:10px"></p>
-    <p class="small" id="syncHelp" hidden style="margin-top:4px">在档案最上面的 CONFIG 填入 Firebase 设定，双屏同步就会启用。</p>
+    <p class="small" id="syncHelp" hidden style="margin-top:4px">照上面那句修好之后，重新整理这一页，状态会变成「已连线」。</p>
   </section>` : ''}
   <section class="sheet">
     <h2>企业档案</h2>
@@ -1799,7 +1817,7 @@ document.addEventListener('click', async e => {
     S = n; toast('复诊开始，档案和计划已带过来'); return go('time');
   }
   if (act==='copyLink'){
-    if (!DB){ toast('还没有连线设定，无法同步给客户'); return; }
+    if (!DB){ toast(FB_ERR || '连线还没建立'); return; }
     try { await navigator.clipboard.writeText(shareLink()); toast('客户链接已复制，贴到 Zoom 聊天室'); }
     catch(_){ prompt('复制这个链接给客户', shareLink()); } return;
   }
@@ -1832,14 +1850,34 @@ sw.addEventListener('click', () => {
 try { if (localStorage.getItem('pinyu_view')==='k'){ sw.setAttribute('aria-pressed','false'); document.body.classList.remove('consult'); } } catch(_){}
 
 /* ================== 启动 ================== */
-function gate(){
-  if (!CONFIG.PIN) return true;
-  try { if (sessionStorage.getItem('pinyu_ok') === '1') return true; } catch(_){}
-  const v = prompt('请输入顾问密码');
-  if (v === CONFIG.PIN){ try { sessionStorage.setItem('pinyu_ok','1'); } catch(_){} return true; }
-  document.body.innerHTML = '<main style="padding:40px 20px;font-family:sans-serif">密码不正确。请向管理员索取。</main>';
-  return false;
+function authed(){ try { return sessionStorage.getItem('pinyu_ok') === '1'; } catch(_){ return false; } }
+function showLogin(onOk){
+  document.getElementById('navrow').hidden = true;
+  document.getElementById('prog').hidden = true;
+  document.querySelector('.bar').style.display = 'none';
+  app.innerHTML = `<section class="sheet hero-card login-card">
+    <div class="lockup"><img src="${LOGO}" alt="品誉"><span>品誉咨询</span></div>
+    <h1>顾问登入</h1>
+    <p class="lead">企业绩效与薪酬诊断系统<br>仅限品誉顾问使用</p>
+    <div class="login-box">
+      <input class="inp" id="pinInput" type="password" placeholder="顾问密码" autocomplete="current-password">
+      <p class="login-err" id="pinErr"></p>
+      <button class="btn block" id="pinGo" type="button">进入系统</button>
+    </div>
+  </section>`;
+  const inp = document.getElementById('pinInput'), err = document.getElementById('pinErr');
+  const go = () => {
+    if (inp.value === CONFIG.PIN){
+      try { sessionStorage.setItem('pinyu_ok','1'); } catch(_){}
+      document.querySelector('.bar').style.display = '';
+      onOk();
+    } else { err.textContent = '密码不正确'; inp.value = ''; inp.focus(); }
+  };
+  document.getElementById('pinGo').addEventListener('click', go);
+  inp.addEventListener('keydown', e => { if (e.key === 'Enter') go(); });
+  setTimeout(()=>inp.focus(), 50);
 }
+let FB_ERR = '';
 function loadScript(src){ return new Promise((res,rej)=>{ const el=document.createElement('script'); el.src=src; el.onload=res; el.onerror=rej; document.head.appendChild(el); }); }
 function blobDownload(){
   return {save: async ({filename, data}) => {
@@ -1859,15 +1897,35 @@ function endpointSample(url){
   };
 }
 async function initFirebase(){
-  const c = CONFIG.FIREBASE; if (!c || !c.projectId) return null;
-  const B = 'https://www.gstatic.com/firebasejs/10.12.2/';
-  await loadScript(B + 'firebase-app-compat.js');
-  await loadScript(B + 'firebase-auth-compat.js');
-  await loadScript(B + 'firebase-firestore-compat.js');
-  firebase.initializeApp(c);
+  const c = CONFIG.FIREBASE;
+  if (!c || !c.projectId){ FB_ERR = '档案里还没填 Firebase 设定。'; return null; }
+  try {
+    const B = 'https://www.gstatic.com/firebasejs/10.12.2/';
+    await loadScript(B + 'firebase-app-compat.js');
+    await loadScript(B + 'firebase-auth-compat.js');
+    await loadScript(B + 'firebase-firestore-compat.js');
+    if (!firebase.apps.length) firebase.initializeApp(c);
+  } catch(e){ FB_ERR = '载入 Firebase 失败，请检查网路连线。'; return null; }
   try { await firebase.auth().signInAnonymously(); }
-  catch(e){ console.warn('匿名登入失败，请在 Firebase 开启 Anonymous sign-in', e); }
-  return firebase.firestore();
+  catch(e){
+    const code = (e && e.code) || '';
+    FB_ERR = /operation-not-allowed/.test(code)
+      ? '还差一步：Firebase → Authentication → Sign-in method → 启用 Anonymous（匿名）。'
+      : /api-key|invalid-api/.test(code) ? 'apiKey 不正确，请重新复制 Firebase 设定。'
+      : '登入失败：' + (code || e.message || e);
+    return null;
+  }
+  const db = firebase.firestore();
+  try { await db.collection(COL).doc('_probe').set({t: Date.now()}); }
+  catch(e){
+    const code = (e && e.code) || '';
+    FB_ERR = /permission-denied/.test(code)
+      ? '还差一步：Firestore → Rules 贴上规则，按「发布」。'
+      : /not-found|unavailable/.test(code) ? '还没建立 Firestore 资料库（Build → Firestore Database → 建立）。'
+      : '资料库写入失败：' + (code || e.message || e);
+    return null;
+  }
+  FB_ERR = ''; return db;
 }
 function watchList(){
   try {
@@ -1879,8 +1937,8 @@ function watchList(){
 }
 const _q = new URL(location.href).searchParams.get('c');
 const _code = (_q || '').trim().toUpperCase();
-if (_code){ ROLE = 'client'; CODE = _code; const _sw = document.getElementById('viewSwitch'); if (_sw) _sw.hidden = true; document.body.classList.remove('consult'); screen = 'done'; }
-if (gate()){
+if (_code){ ROLE = 'client'; CODE = _code; const _sw = document.getElementById('viewSwitch'); if (_sw) _sw.style.display = 'none'; document.body.classList.remove('consult'); screen = 'done'; }
+function boot(){
   if (ROLE === 'client'){ document.getElementById('prog').hidden = true; app.innerHTML = '<section class="sheet"><h2>正在连线…</h2><p class="lead">请稍等，顾问正在开始。</p></section>'; }
   else render();
   (async () => {
@@ -1902,6 +1960,9 @@ if (gate()){
     syncBadge();
   })();
 }
+// 客户永远不用输入密码，顾问第一次进来才要
+if (ROLE === 'client' || !CONFIG.PIN || authed()) boot();
+else showLogin(boot);
 </script>
 </body>
 </html>
